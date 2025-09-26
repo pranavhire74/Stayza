@@ -1,52 +1,53 @@
 import userModel from "../models/user.models.js";
-import { Webhook } from "svix";
+import jwt from "jsonwebtoken";
 
-const clerkWebHooks = async (req, res) => {
-    try {
-        const whook = new Webhook(process.env.SIGNING_SECRET);
+const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 
-        const headers = {
-            "svix-id": req.headers["svix-id"],
-            "svix-timestamp": req.headers["svix-timestamp"],
-            "svix-signature": req.headers["svix-signature"],
-        };
+// 1️⃣ User created (signup)
+export const createUser = async (req, res) => {
+  try {
+    const { email, username, password, image } = req.body;
 
-        // Verify the webhook
-        await whook.verify(JSON.stringify(req.body), headers);
-
-        const { data, type } = req.body;
-
-        // Basic validation
-        if (!data.email_addresses?.[0]?.email_address) {
-            throw new Error("Missing email address in webhook payload.");
-        }
-
-        const userData = {
-            _id: data.id,
-            email: data.email_addresses[0].email_address,
-            username: `${data.first_name} ${data.last_name}`,
-            image: data.image_url,
-        };
-
-        switch (type) {
-            case "user.created":
-                await userModel.create(userData);
-                break;
-            case "user.updated":
-                await userModel.findOneAndUpdate({ _id : data.id }, userData, { new: true });
-                break;
-            case "user.deleted":
-                await userModel.findOneAndDelete({ _id: data.id });
-                break;
-            default:
-                console.log("Unhandled webhook type:", type);
-        }
-
-        return res.json({ success: true, message: "Webhook received" });
-    } catch (error) {
-        console.error("Webhook error:", error);
-        return res.status(400).json({ success: false, message: error.message });
+    // Check if user already exists
+    const existingUser = await userModel.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ success: false, message: "User already exists" });
     }
+
+    const newUser = await userModel.create({ email, username, password, image });
+
+    // Generate JWT token
+    const token = jwt.sign({ id: newUser._id, email: newUser.email }, JWT_SECRET, { expiresIn: "7d" });
+
+    res.json({ success: true, user: newUser, token });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 
-export default clerkWebHooks;
+// 2️⃣ User updated
+export const updateUser = async (req, res) => {
+  try {
+    const { username, email, image } = req.body;
+
+    const updatedUser = await userModel.findByIdAndUpdate(
+      req.user.id, // from verifyToken middleware
+      { username, email, image },
+      { new: true }
+    );
+
+    res.json({ success: true, user: updatedUser });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// 3️⃣ User deleted
+export const deleteUser = async (req, res) => {
+  try {
+    await userModel.findByIdAndDelete(req.user.id); // from verifyToken middleware
+    res.json({ success: true, message: "User deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
